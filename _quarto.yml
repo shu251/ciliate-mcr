@@ -6,17 +6,20 @@ project:
     - about.qmd
 
 website:
-  title: "ciliate-mcr"
-  navbar:
-    left:
-      - href: index.qmd
-        text: Home
-      - href: about.qmd
-        text: Initial data import
+  title: "MCR ciliates"
+  sidebar:
+    style: "docked"
+    contents:
+      - text: "Introduction"
+        href: index.qmd
+      - text: "Analysis"
+        href: about.qmd
+      - section: "Data import"
+        
 
 format:
   html:
-    theme: cosmo
+    theme: slate
     css: styles.css
     toc: true
 

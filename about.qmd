@@ -5,13 +5,19 @@ title: "Metatranscriptome analyses"
 Ran eukrhythmic to process all sequenced metatranscriptome files. Data was mined for ciliate taxa.
 
 # R set up
+
 ```{r}
-# library(tximport); library(DESeq2)
+#| warning: false
 library(tidyverse)
 ```
 
+```{r}
+#| echo: false
+6 + 8
+```
+
 ## Import data
+
 ```{r}
 
 ```
-
