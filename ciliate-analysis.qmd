@@ -1,0 +1,291 @@
+---
+title: "Ciliates at Mid-Cayman Rise"
+format: html
+---
+
+# Set up R environment
+
+```{r}
+# | message: false
+library(tidyverse)
+library(DESeq2)
+library(ggdendro); library(ggalluvial); library(ggupset)
+library(treemapify)
+library(patchwork)
+library(compositions); library(vegan)
+```
+
+
+# Import data locally (from HPRC)
+
+Run `scripts/frenemies-compile-dfs.R`. 
+
+1. Subset Gorda Ridge and Mid-Cayman Rise hydrothermal vent metatranscriptome samples from the entire dataset. This section was run on HPC for subsetting.
+
+2. `mean_counts_df`: mean of scaled TPM from tximport command. This is the correct TPM values that incorporate transcript length. When replicates were run across different flow cells (REP 1 vs. REP 2), these were averaged. Rownames equal the transcript IDs.
+
+3. Join with tax and function annotations
+
+4. Save output R object files
+
+## Data import and pre-processing
+```{r}
+load(file = "../microbes-need-frenemies-euk-metaT/input-docs/gr_vd_longdf.RData", verbose = TRUE)
+```
+
+Import metadata
+```{r}
+metadata <- read_delim("input-docs/metadata.txt")
+```
+
+
+### Assign sample order and colors.
+
+To make downstream figures consistent with one another we can use the below naming schematics.
+
+```{r}
+order_sample_names <- c("Von Damm_Vent_ArrowLoop", "Von Damm_Vent_Bartizan", "Von Damm_Vent_MustardStand", "Von Damm_Vent_OldManTree", "Von Damm_Vent_Ravelin2", "Von Damm_Vent_ShrimpHole", "Von Damm_Vent_WhiteCastle", "Von Damm_Vent_X18", "Von Damm_Non-vent_Plume", "Von Damm_Non-vent_Background", "Piccard_Vent_Lotsoshrimp", "Piccard_Vent_Shrimpocalypse", "Piccard_Non-vent_Plume", "Piccard_Non-vent_Background", "Gorda Ridge_Vent_Candelabra", "Gorda Ridge_Vent_MtEdwards", "Gorda Ridge_Vent_SirVentsAlot", "Gorda Ridge_Vent_VentiLatte", "Gorda Ridge_Non-vent_Plume", "Gorda Ridge_Non-vent_BSW")
+
+label_sample_names <- c("Von Damm Vent ArrowLoop", "Von Damm Vent Bartizan", "Von Damm Vent MustardStand", "Von Damm Vent OldManTree", "Von Damm Vent Ravelin2", "Von Damm Vent ShrimpHole", "Von Damm Vent WhiteCastle", "Von Damm Vent X18", "Von Damm Non-vent Plume", "Von Damm Non-vent Background", "Piccard Vent Lotsoshrimp", "Piccard Vent Shrimpocalypse", "Piccard Non-vent Plume", "Piccard Non-vent Background", "Gorda Ridge Vent Candelabra", "Gorda Ridge Vent MtEdwards", "Gorda Ridge Vent SirVentsAlot", "Gorda Ridge Vent VentiLatte", "Gorda Ridge Non-vent Plume", "Gorda Ridge Non-vent BSW")
+
+label_sample_names_SHORT <- c("ArrowLoop", "Bartizan", "MustardStand", "OldManTree", "Ravelin2", "ShrimpHole", "WhiteCastle", "X18", "Plume", "Background", "Lotsoshrimp", "Shrimpocalypse", "Plume", "Background", "Candelabra", "MtEdwards", "SirVentsAlot", "VentiLatte", "Plume", "BSW")
+
+order_field <- c("Von Damm", "Piccard", "Gorda Ridge")
+color_field <- c("#B56576", "#355070", "#EAAC8B")
+order_bin <- c("Vent", "Non-vent")
+color_bin <- c("#070600", "#DDDDDD")
+```
+
+```{r}
+### Align with sample IDs for these samples
+metadata_metaT <- metadata %>% 
+  pivot_longer(TEMP:GrazingEffect_hr, names_to = "VARIABLES", values_to = "VALUES") %>% 
+  group_by(SAMPLE_NAME, VARIABLES) %>% 
+  summarise(VALUE = mean(VALUES)) %>% 
+  separate(SAMPLE_NAME, into = c("VENT_FIELD", "VENT_BIN", "LOCATION"), sep = "_", remove = FALSE) %>% 
+  right_join((long_df_annot %>% 
+  select(fieldyear, LOCATION, SAMPLETYPE, VENT_FIELD, VENT_BIN) %>% 
+  distinct())) %>% 
+  mutate(SAMPLE_NAME_ORDER = factor(SAMPLE_NAME, levels = order_sample_names, labels = label_sample_names),
+         FIELD_ORDER = factor(VENT_FIELD, levels = order_field),
+         BIN_ORDER = factor(VENT_BIN, levels = order_bin))
+# glimpse(metadata)
+# glimpse(metadata_metaT)
+```
+
+```{r}
+key_sample <- metadata_metaT %>% 
+  select(SAMPLE_NAME, VENT_FIELD, VENT_BIN, LOCATION, fieldyear, SAMPLETYPE) %>% 
+  distinct() %>% 
+  mutate(SAMPLE_NAME_ORDER = factor(SAMPLE_NAME, levels = order_sample_names, labels = label_sample_names),
+         FIELD_ORDER = factor(VENT_FIELD, levels = order_field),
+         BIN_ORDER = factor(VENT_BIN, levels = order_bin))
+```
+
+# Environmental parameters
+
+Use the key_sample dataframe as an outline to plot each tile plot. Environmental parameters will be shown as a heat map.
+
+
+```{r, fig.height=6, fig.width=6}
+bin <- key_sample %>% 
+  filter(VENT_FIELD != "Gorda Ridge") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = 0, fill = BIN_ORDER)) +
+  scale_fill_manual(values = color_bin) + 
+  geom_tile(color = "black", linewidth = 1) +
+  coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0))
+
+field <- key_sample %>% 
+  filter(VENT_FIELD != "Gorda Ridge") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = 0, fill = FIELD_ORDER)) +
+  scale_fill_manual(values = color_field) + 
+  geom_tile(color = "black", linewidth = 1) +
+  coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0))
+
+
+bin + field + patchwork::plot_layout(nrow = 1)
+# ggsave("figures/categories.svg", width = 6, height = 6, device = "svg", limitsize = FALSE)
+```
+
+## Geochemical heatmap metadata
+
+```{r, fig.height=6, fig.width=9}
+(metadata_metaT %>% 
+   filter(VENT_FIELD != "Gorda Ridge") %>% 
+  filter(VARIABLES == "TEMP") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = VARIABLES, fill = VALUE)) +
+  geom_tile(stat = "identity", linewidth = 1, color = "black") +
+  scale_fill_gradient(low = "#fee0d2", high = "#cb181d") +
+  coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0))) +
+(metadata_metaT %>% 
+   filter(VENT_FIELD != "Gorda Ridge") %>% 
+    filter(VARIABLES == "pH") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = VARIABLES, fill = VALUE)) +
+  geom_tile(stat = "identity", linewidth = 1, color = "black") +
+  scale_fill_gradient(low = "#fee0d2", high = "#cb181d") +
+  coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0)) ) +
+  (metadata_metaT %>% 
+     filter(VENT_FIELD != "Gorda Ridge") %>% 
+    filter(VARIABLES == "CH4") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = VARIABLES, fill = VALUE)) +
+  geom_tile(stat = "identity", linewidth = 1, color = "black") +
+  scale_fill_gradient(low = "#fee0d2", high = "#cb181d") +
+  coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0)) ) +
+  patchwork::plot_layout(nrow = 1)
+
+# ggsave("figures/heatmap-env-params.svg", width = 9, height = 6, device = "svg", limitsize = FALSE)
+```
+## Biological heatmap metadata
+```{r, fig.height=6, fig.width=9}
+(metadata_metaT %>% 
+  filter(VENT_FIELD != "Gorda Ridge") %>% 
+  filter(VARIABLES == "ProkConc") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = VARIABLES, fill = VALUE)) +
+  geom_tile(stat = "identity", linewidth = 1, color = "black") +
+  scale_fill_gradient(low = "#c6dbef", high = "#08306b") +
+  coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0)) ) +
+(metadata_metaT %>% 
+  filter(VENT_FIELD != "Gorda Ridge") %>%
+  filter(VARIABLES == "EukConc") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = VARIABLES, fill = VALUE)) +
+  geom_tile(stat = "identity", linewidth = 1, color = "black") +
+  scale_fill_gradient(low = "#c6dbef", high = "#08306b") +
+coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0))  ) +
+  (metadata_metaT %>% 
+  filter(VENT_FIELD != "Gorda Ridge") %>%
+  filter(VARIABLES == "GrazingEffect_hr") %>% 
+  ggplot(aes(x = SAMPLE_NAME_ORDER, y = VARIABLES, fill = VALUE)) +
+  geom_tile(stat = "identity", linewidth = 1, color = "black") +
+  scale_fill_gradient(low = "#c6dbef", high = "#08306b") +
+  coord_flip() +
+  theme_classic() +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        margin(t=0, r=0, b=0,l=0)) ) +
+  patchwork::plot_layout(nrow = 1)
+
+# ggsave("figures/heatmap-biol-params_2.svg", width = 9, height = 6, device = "svg", limitsize = FALSE)
+```
+# Stats on metatranscriptome results
+
+> Need help to get relevant things... i.e. how to interpret TPM, vs. else. 
+
+# Import and include KEGG IDs
+
+Previously curated and parsed KEGG ID table. Note that KEGG IDs are often duplicated as the orthology information is repeated and individual KEGGs belong to different kinds of 
+
+```{r}
+kegg <- read.csv("../KEGG_DB/combined_kegg.csv") %>% 
+  select(KEGG = KO_number, everything(), -X)
+
+curated_kegg <- read.csv("../KEGG_DB/kegg_curation_SKHU_Oct2024.csv", na.strings = "NA")
+
+# Join to include all KEGG IDs and curated list.
+kegg_key <- kegg %>% 
+  distinct() %>% 
+  left_join(curated_kegg, multiple = "all", by = join_by(KEGG))
+```
+
+Manual isolation of GO terms associated with parasitism.
+```{r}
+# Go terms for parasitism
+curated_long_df <- long_df_annot %>% 
+  # Parse and import KEGG IDs
+  separate_longer_delim(KEGG_ko, delim = ",") %>% 
+  mutate(KEGG = str_remove_all(KEGG_ko, "ko:")) %>%
+  left_join(kegg_key, by = "KEGG") %>% 
+  mutate(go_term_parasitism = case_when(
+    grepl("15858", GOs) ~ "Parasitism",
+    grepl("15867", GOs) ~ "Parasitism",
+    grepl("8643", GOs) ~ "Parasitism",
+  ))
+
+# But none where actually found
+# tmp <- filter(curated_long_df, go_term_parasitism == "Parasitism")
+# View(tmp)
+```
+
+`curated_long_df`: this dataframe includes the curated KEGG IDs as much as we have completed. Any downstream analysis that looks at KEGG information should use it. Note that KEGG IDs are often duplciated!
+
+
+
+
+
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+
+

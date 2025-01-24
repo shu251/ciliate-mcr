@@ -1,0 +1,281 @@
+---
+title: "Compile from eukrhythmic"
+format: html
+execute: 
+  eval: false
+---
+
+# eukrhythmic background
+
+Code for running metatranscriptome analysis with [eukrhythmic](https://eukrhythmic.readthedocs.io/en/latest/index.html). Data originates from several vent sites for project 'Microbes need frenemies'.
+
+
+> Need information on file structure that I'm looking for
+
+## Output files from eukrhythmic
+
+Annotation information is saved as `TaxonomicAndFunctionalAnnotations.csv` and all transcript count data is output from Salmon as `quant.sf` files.
+
+## Microbes need frenemies
+
+> specific detail on how eukrhtyhtmic was run for these samples.
+
+Fastq files were run on both lanes 1 and 2. So will treat as *technical* replicates for now. Separate fastq_list file so we can left join the sample_list information.
+
+For assembly groupings, we want diversity represented, but too much diversity may cause chimeric contigs. And if we put in too many reads, this can be a bottleneck for assembly (computationally).
+
+Here, we decided to separate by vent field, sample type (vent vs. non-vent), and if there were many vents (like in the MCR sites), each vent was split into it's own assembly. Based on the 18S analysis, we know that vents even meters apart from one another can have very distinct and diverse communities. For the MCR work, some of the vent (in situ) samples were paired with shipboard grazing assays. These are assembled with the vent samples (as the original fluid was the same) and represent time final for the grazing experiments.
+
+## Set up in R
+
+```{r}
+# | warning: false
+library(tidyverse)
+```
+
+
+## Create assembly groups
+
+```{r}
+# | echo: false
+sample_list <- read.csv("input-docs/frenemies-sample-list.csv")
+fastq_list <- read.csv("input-docs/frenemies-fastq-list.csv", header = FALSE)
+```
+
+```{r}
+sample_list_wassemblygroup <- fastq_list %>% 
+  mutate(FastqFile = str_remove_all(V1, "_R1_001.fastq.gz"),
+         SampleName = str_remove_all(FastqFile, "_S\\d+_L00\\d+")) %>% 
+  left_join(sample_list %>% select(SampleName = SITE_NUM_FIELDYR_VENT_EXP_SAMPLEID, SAMPLEID, everything())) %>% 
+  mutate(VENT = case_when(
+    VENT == "Mustard Stand" ~ "MustardStand",
+    TRUE ~ VENT
+  )) %>% 
+  mutate(TYPE = case_when( #Option to use casewhen for setting assembly grouping
+  grepl("Plume", VENT) ~ "nonvent",
+  grepl("plume", VENT) ~ "nonvent",
+  grepl("Plus30m", VENT) ~ "nonvent",
+  grepl("BSW", VENT) ~ "nonvent",
+  grepl("Background", VENT) ~ "nonvent",
+  grepl("Transit", VENT) ~ "nonvent",
+  TRUE ~ "vent"
+    )) %>%
+  mutate(FIELD = case_when(
+    FIELDYR == "VonDamm2020" ~ "VONDAMM",
+    FIELDYR == "Piccard2020" ~ "PICCARD",
+    TRUE ~ SITE
+  )) %>% 
+  mutate(AXIAL_CORR = case_when(
+    grepl("IntlDistrict", VENT) ~ "IntlDistrict",
+    grepl("ASHES", VENT) ~ "ASHES",
+    grepl("Transit", VENT) ~ "Background",
+    TRUE ~ VENT
+  )) %>% 
+  mutate(AssemblyGroup = case_when(
+    SITE == "MCR" ~ paste(FIELD, VENT, TYPE, sep = "_"),
+    SITE == "GR" ~ paste(FIELD, FIELDYR, TYPE, sep = "_"),
+    SITE == "AXIAL" ~ paste(FIELD, AXIAL_CORR, TYPE, sep = "_")
+  )) %>% 
+  # unite("AssemblyGroup", c(FIELD, EXP, TYPE), remove = FALSE) %>% 
+  mutate(SampleID = SampleName) %>% 
+  select(SampleName, SampleID, AssemblyGroup, FastqFile, NUMBER = LAB_NUM, FIELD, SITE, FIELDYR, VENT, EXP, TYPE, SAMPLE_NAME, ORIGIN, SAMPLEID)
+#SITE_NUM_FIELDYR_VENT_EXP_SAMPLEID
+table(sample_list_wassemblygroup$AssemblyGroup)
+```
+```{r}
+# | eval: false
+write_delim(sample_list_wassemblygroup %>% select(SampleName, SampleID, AssemblyGroup, FastqFile), file = "input-docs/frenemies-metat-samplelist.txt", delim = "\t")
+```
+
+# Process counts via tximport
+
+First run `scripts/create-samplelist.R`. This will output a sample list ready to be run with the tximport step.
+
+Then execute `scripts/run_tximport_frenemies.R`. This will import all salmon count files and process transcript length to get transcript-level estimates as counts. With slurm: `sbatch metaT-run-tximport.sm`.
+
+Output from above is an RData object that includes the txi object. This txi object can be subset for downstream analysis. It also includes a sample list for the txi object so we can subset specific samples.
+
+```         
+/scratch/group/hu-lab/frenemies/euk-metaT-eukrhythmic-output/tximport-sept-2024.RData
+```
+
+## Mid-Cayman Rise samples only
+
+The \`\``run_tximport_frenemies.R` script has code for executing all samples and then repeating the process for only samples from the Mid-Cayman Rise.
+
+For all below analyses, use this, `tximport-MCR-sept-2024.RData`.
+
+Import all needed R Objects:
+
+```{r}
+#| message: false
+library(DESeq2)
+library(tidyverse)
+library(tximport)
+library(data.table)
+
+load("/scratch/group/hu-lab/frenemies/euk-metaT-eukrhythmic-output/tximport-MCR-sept-2024.RData", verbose = TRUE)
+# txi_mcr and sample_merged_mcr
+```
+
+The goal is to get a table with samples that reflects the *lengthScaledTPM*. This is calculated using *tximport*, where the the within-gene summed TPM is multiplied by the average transcript length, averaged over samples, then scaled up to the per-sample library size.
+
+The output can be treated as a *TPM* that has been corrected for differences in average transcript length across samples.
+
+
+## Extracting TPM values relevant for MCR only
+
+```{r}
+class(txi_mcr)
+
+(as.data.frame(txi_mcr$countsFromAbundance))
+
+mcr_lenscaled_TPM <- makeCountsFromAbundance(
+  as.matrix(txi_mcr$counts),
+  as.matrix(txi_mcr$abundance),
+  as.matrix(txi_mcr$length),
+  countsFromAbundance = "lengthScaledTPM"
+)
+```
+
+```{r}
+# Go from matrix to data frame. Remove rows that only have zeroes
+mcr_lenscaled_TPM_df <- as.data.frame(mcr_lenscaled_TPM) %>% 
+  filter(if_any(everything(.), ~. != 0))
+
+glimpse(mcr_lenscaled_TPM_df)
+# from 37.5 million to 13,809,499 transcripts. This is representative of things detected at MCR.
+```
+
+## Estimate across replicates
+
+Rename so replicates have the same name for counts
+
+```{r}
+## Get mean across replicates
+counts_df <- mcr_lenscaled_TPM_df
+names_orig <- colnames(counts_df)
+names_new <- sub("_[^_]+$", "", names_orig)
+colnames(counts_df) <- names_new
+
+mean_mcr_TPM_df <- counts_df %>% 
+  cbind(as.list(.) %>%
+          Filter(is.numeric, .) %>%
+          split(names(.)) %>%
+          lapply(as.data.frame) %>%
+          lapply(rowMeans) %>%
+          setNames(paste0("mean.", names(.)))) %>%
+  select(starts_with("mean"))
+```
+
+Save data frames for downstream analysis
+
+```{r}
+# mcr_lenscaled_TPM - matrix of everything
+# mcr_lenscaled_TPM_df - data frame, all zero trancripts removed
+# mean_mcr_TPM_df - average TPM across replicates
+save(mcr_lenscaled_TPM, mcr_lenscaled_TPM_df, mean_mcr_TPM_df, file = "/scratch/group/hu-lab/frenemies/dfs_mcr_sept2024.RData")
+```
+
+# Incorporate annotations
+
+Still working remote on HPRC.
+Compile transcript information to annotate.
+
+See `scripts/compiled_output_dfs.R`. Using `mean_mcr_TPM_df` and `taxfxn` in below code:
+
+```{r}
+long_df <- mean_mcr_TPM_df %>%
+  rowwise() %>%
+  mutate(NUM_ZERO = sum(c_across(starts_with("mean.")) == 0)) %>%
+  rownames_to_column(var = "SequenceID") %>%
+  pivot_longer(cols = starts_with("mean."), values_to = "scaledTPM") %>%
+  filter(scaledTPM > 0) %>% 
+  separate(name, c("mean.field", "LIBRARY_NUM", "fieldyear", "LOCATION", "SAMPLETYPE", "SAMPLEID"), "_", 
+                   remove = FALSE) %>%
+             select(-mean.field, -name) %>%
+             mutate(VENT_FIELD = case_when(grepl("Piccard", fieldyear) ~ "Piccard",
+                                      grepl("VonDamm", fieldyear) ~ "Von Damm",
+                    grepl("Axial", fieldyear) ~ "Axial",
+                    grepl("Gorda", fieldyear) ~ "Gorda Ridge")) %>%
+  mutate(VENT_BIN = case_when(
+        (LOCATION == "Background" | LOCATION == "Plume" | LOCATION == "BSW") ~ "Non-vent",
+        grepl("IntlDistrict", LOCATION) ~ "Non-vent",
+        grepl("ASHES", LOCATION) ~ "Non-vent",
+        TRUE ~ "Vent"
+      ))
+```
+
+Add in annotation information:
+
+```{r}
+long_df_annot <- long_df %>%
+  left_join(taxfxn, by = "SequenceID") %>%
+  separate(full_classification, c("Domain", "Supergroup", "Phylum", "Class", "Order", "Family", "Genus_spp"), sep = "; ", remove = FALSE) %>%
+  mutate(SUPERGROUP_18S = case_when(
+    Phylum == "Ciliophora" ~ "Alveolata-Ciliophora",
+    Phylum == "Dinophyta" ~ "Alveolata-Dinoflagellata",
+    # Phylum == "Perkinsea" ~ "Protalveolata",
+    # Phylum == "Colponemidia" ~ "Protalveolata",
+    # Phylum == "Chromerida" ~ "Protalveolata",
+    Supergroup == "Alveolata" ~ "Other Alveolata",
+    Supergroup %in% as_is ~ Supergroup,
+    Supergroup == "Haptista" ~ "Hacrobia",
+    Phylum == "Radiolaria" ~ "Rhizaria-Radiolaria",
+    Phylum == "Cercozoa" ~ "Rhizaria-Cercozoa",
+    (Supergroup == "Rhizaria" & Phylum != "Radiolaria" & Phylum != "Cercozoa") ~ "Rhizaria",
+    Order == "Bigyra" ~ "Stramenopiles-Opalozoa;Sagenista",
+    Class == "Ochromonadales" ~ "Stramenopiles-Ochrophyta",
+    Supergroup == "Stramenopiles" ~ "Stramenopiles",
+    Supergroup == "Opisthokonta" ~ "Opisthokonta",
+    (is.na(Supergroup) | Supergroup == "Eukaryota incertae sedis") ~ "Unknown Eukaryota",
+    TRUE ~ "Other-metaT only"))
+# head(long_df_annot)
+dim(long_df_annot);dim(long_df)
+```
+
+```{r}
+save(long_df_annot, long_df, file = "/scratch/group/hu-lab/frenemies/dfs_mcr_only.RData")
+
+## See usage in analysis code:
+# load("output/dfs_mcr_only.RData", verbose = TRUE)
+# long_df_annot, long_df
+```
+
+# Differential expression analysis
+
+STEPS:
+(a) Use tximport function to subset to data of interest.
+
+(b) Use sample list, ensure sample names are synced. This sample list has the column metadata for DESeq input "design"
+
+(c) Use DESeq's `DESeqDataSetFromTximport()` to import data of interest.
+
+(d) Perform transcript subsetting, so that transcripts should appear in more than 1 sample and have a total sum greater than 10. Also include a step to deal with zeroes by calculating a modified geometric mean (poscounts)
+
+(e) Report and compile final results as the upregulated vs. downregulated transcripts in the given dataset.
+
+
+## Subset via tximport
+
+```{r}
+# Subset txi directly
+subsetTxi <- function(txi, samples, include_genes=rownames(txi$counts))
+{
+  genes <- rownames(txi$counts)[rownames(txi$counts) %in% include_genes]
+  txi$abundance <- txi$abundance[genes, samples$sample]
+  txi$counts <- txi$counts[genes, samples$sample]
+  txi$length <- txi$length[genes, samples$sample]
+  return(txi)
+}
+```
+
+> I need to do this on the HPRC with just ciliates?
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
