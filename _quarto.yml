@@ -1,5 +1,9 @@
 project:
   type: website
+  output-dir: docs
+  render: 
+    - index.qmd
+    - about.qmd
 
 website:
   title: "ciliate-mcr"
@@ -7,7 +11,8 @@ website:
     left:
       - href: index.qmd
         text: Home
-      - about.qmd
+      - href: about.qmd
+        text: Initial data import
 
 format:
   html:

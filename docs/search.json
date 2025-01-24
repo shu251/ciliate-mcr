@@ -1,0 +1,23 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Code for ciliates at MCR project",
+    "section": "",
+    "text": "This is a Quarto website.\nTo learn more about Quarto websites visit https://quarto.org/docs/websites.\n\n1 + 1\n\n[1] 2"
+  },
+  {
+    "objectID": "about.html",
+    "href": "about.html",
+    "title": "Metatranscriptome analyses",
+    "section": "",
+    "text": "Ran eukrhythmic to process all sequenced metatranscriptome files. Data was mined for ciliate taxa."
+  },
+  {
+    "objectID": "about.html#import-data",
+    "href": "about.html#import-data",
+    "title": "Metatranscriptome analyses",
+    "section": "Import data",
+    "text": "Import data"
+  }
+]
